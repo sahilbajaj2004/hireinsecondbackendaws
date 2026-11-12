@@ -195,13 +195,12 @@ async function syncRealUserNotifications(userId, userType) {
         }).catch(() => null);
 
         if (!existing) {
-          const isZoom = (meet.meetingLink || meet.joinUrl || "").includes("zoom") || meet.meetingPlatform === "zoom";
           await Notifications.create({
             userId: userId,
             type: "Interview",
             notificationDetail: meetId,
             title: `Interview ${meet.status || "Scheduled"}`,
-            details: `Interview with ${meet.candidate || "candidate"} for ${meet.jobTitle || "opening"} at ${meet.meetingStartTime}. Platform: ${isZoom ? "Zoom" : "Google Meet"}`,
+            details: `Interview with ${meet.candidate || "candidate"} for ${meet.jobTitle || "opening"} at ${meet.meetingStartTime}. Platform: Zoom`,
             status: "New",
             isClear: false,
             sentAt: meet.createdAt || new Date(),
@@ -340,13 +339,12 @@ async function syncRealUserNotifications(userId, userType) {
         }).catch(() => null);
 
         if (!existing) {
-          const isZoom = (meet.meetingLink || meet.joinUrl || "").includes("zoom") || meet.meetingPlatform === "zoom";
           await Notifications.create({
             userId: userId,
             type: "Interview",
             notificationDetail: meetId,
             title: "Interview Scheduled",
-            details: `Interview for ${meet.jobTitle || "your application"} scheduled for ${meet.meetingStartTime}. Platform: ${isZoom ? "Zoom" : "Google Meet"}`,
+            details: `Interview for ${meet.jobTitle || "your application"} scheduled for ${meet.meetingStartTime}. Platform: Zoom`,
             status: "New",
             isClear: false,
             sentAt: meet.createdAt || new Date(),

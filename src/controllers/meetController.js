@@ -79,63 +79,58 @@ const addInterview = async (req, res) => {
     const durationMinutes = parseInt(String(duration || 45).replace(/[^\d]/g, ""), 10) || 45;
     const meetingPassword = password || Math.floor(100000 + Math.random() * 900000).toString();
     const meetingTimezone = timezone || "Asia/Kolkata";
-    const isGoogleMeet =
-      meetingPlatform === "google_meet" ||
-      (typeof meetingLink === "string" && meetingLink.includes("meet.google.com"));
 
-    let zoomData = null;
-    if (!isGoogleMeet) {
-      try {
-        const zoomApiToken = await getZoomApiToken();
-        if (zoomApiToken) {
-          const requestOptions = {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: zoomApiToken,
-            },
-            body: JSON.stringify({
-              topic: title || "Interview",
-              type: 2,
-              start_time: meetingStartTime,
-              duration: durationMinutes,
-              timezone: meetingTimezone,
-              password: meetingPassword,
-              agenda: description || title,
-              settings: {
-                ...settings,
-                join_before_host: true,
-                jbh_time: 0,
-                waiting_room: false,
-                meeting_authentication: false,
-                enforce_login: false,
-                approval_type: 2,
-                participant_video: true,
-                host_video: true,
-                mute_upon_entry: false,
-                use_pmi: false,
-              },
-            }),
-          };
-          const zoomResponse = await fetch(zoomMeetingCreateUrl, requestOptions);
-          if (zoomResponse && zoomResponse.ok) {
-            zoomData = await zoomResponse.json();
-          } else if (zoomResponse) {
-            const errText = await zoomResponse.text().catch(() => "");
-            console.warn("Zoom meeting creation API response:", zoomResponse.status, errText);
-          }
-        }
-      } catch (e) {
-        console.warn("Zoom meeting creation fallback:", e.message);
-      }
+    const zoomApiToken = await getZoomApiToken();
+    if (!zoomApiToken) {
+      return res.status(500).json({
+        success: false,
+        message: "Failed to retrieve Zoom API token",
+      });
     }
 
-    const fallbackRoomId = "his-" + Math.random().toString(36).substring(2, 6) + "-" + Math.random().toString(36).substring(2, 6);
-    // If Google Meet, use provided link. If Zoom, use zoomData.join_url. Otherwise fallback to reliable Jitsi video room.
-    const resolvedLink =
-      (isGoogleMeet && meetingLink)
-        ? meetingLink.trim()
-        : zoomData?.join_url || meetingLink || `https://meet.jit.si/hireinsecond-interview-${fallbackRoomId}`;
+    const requestOptions = {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: zoomApiToken,
+      },
+      body: JSON.stringify({
+        topic: title || "Interview",
+        type: 2,
+        start_time: meetingStartTime,
+        duration: durationMinutes,
+        timezone: meetingTimezone,
+        password: meetingPassword,
+        agenda: description || title,
+        settings: {
+          ...settings,
+          join_before_host: true,
+          jbh_time: 0,
+          waiting_room: false,
+          meeting_authentication: false,
+          enforce_login: false,
+          approval_type: 2,
+          participant_video: true,
+          host_video: true,
+          mute_upon_entry: false,
+          use_pmi: false,
+          auto_recording: "cloud",
+        },
+      }),
+    };
+
+    const zoomResponse = await fetch(zoomMeetingCreateUrl, requestOptions);
+    if (!zoomResponse.ok) {
+      const errText = await zoomResponse.text().catch(() => "");
+      console.error("Zoom meeting creation API response:", zoomResponse.status, errText);
+      return res.status(500).json({
+        success: false,
+        message: "Failed to create Zoom meeting",
+        error: errText,
+      });
+    }
+
+    const zoomData = await zoomResponse.json();
 
     const jobTitle = await Jobs.findOne({ _id: resolvedJobId });
     const users = await Users.findOne({ _id: resolvedEmployeeId });
@@ -157,14 +152,14 @@ const addInterview = async (req, res) => {
       password: zoomData?.password || meetingPassword,
       timezone: zoomData?.timezone || meetingTimezone,
       duration: `${durationMinutes}m`,
-      meetingLink: resolvedLink,
-      joinUrl: resolvedLink,
-      startUrl: zoomData?.start_url || resolvedLink,
+      meetingLink: zoomData?.join_url,
+      joinUrl: zoomData?.join_url,
+      startUrl: zoomData?.start_url || zoomData?.join_url,
       interviewers: zoomData?.settings?.meeting_invitees
         ? JSON.stringify(zoomData.settings.meeting_invitees)
         : (typeof assignee === "string" ? assignee : JSON.stringify(assignee || [])),
       candidate: users?.email || (users?.firstName ? `${users.firstName} ${users.lastName || ""}`.trim() : "Candidate"),
-      meetingId: zoomData?.id ? String(zoomData.id) : fallbackRoomId,
+      meetingId: String(zoomData?.id),
     });
 
     let updateJobApplication = null;
@@ -823,6 +818,7 @@ const resheduleInterview = async (req, res) => {
           meeting_authentication: false,
           enforce_login: false,
           approval_type: 2,
+          auto_recording: "cloud",
         },
       }),
     };
