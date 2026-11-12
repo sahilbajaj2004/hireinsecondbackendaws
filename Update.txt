@@ -1,0 +1,602 @@
+======================================================================
+13. Client Job Posting Flow Backend Alignment
+Date: 2026-10-28
+======================================================================
+
+1. Jobs Controller (`src/controllers/jobsController.js`):
+   - `addJobs`:
+     * Returns created job document in response payload (`data: data || updateJobs`), enabling the mobile 5-step posting flow to immediately link to the created job or display requisition confirmation.
+     * Fixed asynchronous `await data.save()` for salary calculation persistence.
+     * Added robust `parseBudgetValue` helper to safely parse budget ranges (e.g. `"24-36"`, `"28 LPA"`) into numeric values without triggering Mongoose `Cast to Number failed for value "NaN" at path "salary"` validation errors.
+     * Supported all Stitch schema parameters: `functionalArea`, `probabation`, `contractDays`, `replacementDays`, `taxTerms`, `paymentType`.
+   - `updateJobs`:
+     * Added safe numeric budget/salary resolution.
+======================================================================
+
+======================================================================
+12. PDF Resume Parser & Signup Upload Flow Fixes
+Date: 2026-10-28
+======================================================================
+
+1. Resume Parser Helper (`src/helpers/resumeParser.js` & `src/routers/userRouter.js`):
+   - Corrected `pdf-parse` v2 module integration:
+     * `pdf-parse` (v2.4.5) exports `{ PDFParse }` class.
+     * Fixed instantiation and invocation: `const parser = new PDFParse({ data }); const result = await parser.getText({ first: 20 });` with clean `parser.destroy()` cleanup.
+     * Fixed crash where `pdfParse is not a function` / `PDFParse is not defined` previously triggered 422 errors on the `/api/user/parseResume` endpoint.
+   - Enhanced `uploadResume` middleware to accept both `file` and `resume` multipart field names gracefully.
+   - Verified end-to-end with real PDF uploads (`SahilBajaj.pdf`), achieving 200 OK responses extracting fullName, contact info, headline, skills, work experience, and education directly into user profile fields.
+
+2. Dev Server Watcher:
+   - Backend service is running via nodemon watching for file modifications on port 4000.
+======================================================================
+
+======================================================================
+11. Connected Accounts System (Google, LinkedIn, GitHub, Portfolio)
+Date: 2026-10-28
+======================================================================
+
+1. Schema Updates (`src/models/userModel.js`):
+   - Added `connectedAccounts` subdocument schema with dedicated sub-schemas for `google`, `linkedin`, `github`, and `portfolio`:
+     * `google`: `{ connected: Boolean, email: String, id: String, connectedAt: Date }`
+     * `linkedin`: `{ connected: Boolean, url: String, username: String, connectedAt: Date }`
+     * `github`: `{ connected: Boolean, url: String, username: String, connectedAt: Date }`
+     * `portfolio`: `{ connected: Boolean, url: String, connectedAt: Date }`
+
+2. Controller Updates (`src/controllers/userController.js`):
+   - `getProfileDetails`:
+     * Seamlessly populates `connectedAccounts` from stored data or legacy fields (`googleId`, `linkedinUrl`, `githubUrl`, `portfolioUrl`), ensuring backward compatibility and consistent API responses across mobile and web clients.
+   - `updateUserFields`:
+     * Added bidirectional synchronization between `connectedAccounts` object and legacy fields (`linkedinUrl`, `githubUrl`, `portfolioUrl`, `linkedin`, `github`).
+   - `editProfile`:
+     * Supported direct updates for `linkedinUrl`, `githubUrl`, `portfolioUrl`, and `connectedAccounts`.
+   - New Handlers:
+     * `updateConnectedAccounts`: `POST /api/user/connectedAccounts` - Updates specific service or multiple connected accounts.
+     * `disconnectAccount`: `POST /api/user/disconnectAccount` - Safely unlinks a connected service and clears related fields.
+
+3. Router Updates (`src/routers/userRouter.js`):
+   - Registered `POST /api/user/connectedAccounts` with `userAuthorization`.
+   - Registered `POST /api/user/disconnectAccount` with `userAuthorization`.
+======================================================================
+
+======================================================================
+10. Notification Hub & Real Backend Synchronization (Candidate & Client Portals)
+Date: 2026-10-27
+======================================================================
+
+1. Controller Enhancements (`src/controllers/notificationController.js`):
+   - `getNotification`:
+     * 100% Real Backend Data Sync (`syncRealUserNotifications`):
+       - Removed all static/mock seed notifications (CRED, Swiggy, Zomato, etc.).
+       - Candidate sync: Automatically synchronizes real applications from `JobsApplications` (`companyId`), real job invitations from `JobsInvitations`, real interviews from `JobsInterview`, and real job recommendations from active jobs in `Jobs`. Supports all application lifecycle statuses (`Application Submitted`, `Application Accepted 🎉`, `Application Onboarded 🎉`, `Application Withdrawn`, `Application Update`).
+       - Client sync: Automatically synchronizes real candidate applications received for jobs belonging to the employer (or associated company name), real client KYC verification events (`KYC_CLIENT`), and real scheduled interviews (`JobsInterview`).
+       - Idempotent deduplication: Content-aware deduplication prevents duplicate notifications on repeated API queries.
+     * Clean Tag Resolution (`resolveTag`):
+       - Resolves any raw 24-character hexadecimal MongoDB ObjectIds into human-readable semantic tags (e.g., `Avitor • Withdrawn`, `Bengaluru, Karnataka • ₹18 LPA`, `Google Meet`, `Offer Signed`, `Verified Recruiter`).
+       - Formats locations (parses nested city/state JSON objects into clean strings).
+       - Formats salaries/budgets into clean LPA strings (e.g. `₹18 LPA`).
+     * User resolution: Falls back smoothly to `req.user?._id` and `req.user?.userType` when not provided in query.
+     * Sorting: Sorted descending by `{ sentAt: -1, _id: -1 }` ensuring the newest notifications are delivered first.
+     * Category Filtering: Full server-side category filter (`interviews`, `applications`, `jobs`/`alerts`, `applicants`, `system`/`kyc`).
+   - `updateNotification`:
+     * Added bulk `markAllRead` support (`req.body.all === true` or `notificationId === "all"`). Updates all unread notifications (`status: "New"`) for the authenticated user to `status: "Read"` in MongoDB.
+     * Individual `notificationId` updates single notification to `status: "Read"`.
+   - `deleteNotification`:
+     * Sets `status = "Delete"` on the target notification record in MongoDB, allowing card dismissal to persist across sessions.
+   - `getNotificationUnreadCount`:
+     * Uses `Notifications.countDocuments({ userId, status: "New", isClear: false })` for optimal performance.
+   - `clearNotification`:
+     * Sets `isClear = true` across all notifications for the user.
+======================================================================
+
+======================================================================
+HireInSecond Backend Updates - Profile Completion & Setup Alignment
+Date: 2026-10-25
+======================================================================
+
+1. src/controllers/userController.js (updateUserFields):
+   - Added user existence check (`User.findOne(filter)`) at the start of the handler so existing user attributes are retained.
+   - Added bidirectional alias support for `experience` <-> `exprience` (MongoDB schema property).
+   - Added mapping for `title` -> `role` so mobile titles align with the user model role field.
+   - Fixed `isProfileCompleted` evaluation:
+     * Previously, `isProfileCompleted` was evaluated solely on `req.body.document`, which overwrote `isProfileCompleted` to false whenever `userType` or non-updated fields (like country/countryCode/phone) were absent from the update payload.
+     * Now evaluates against a merged profile (`existingUser` + `updateData`), preventing false negatives.
+     * Supports explicit `isProfileCompleted: true/false` passed in the update payload.
+     * For `client`/`company`: completed when `companyName` and (`designation` or `role`) are present.
+     * For `personal`/`individual`: completed when `skills` and (`exprience` or `experience` or `role` or `title`) are present.
+
+2. src/controllers/userController.js (updateProfile):
+   - Added fallback for `req.body.experience` when `exprience` is not passed.
+   - Supported explicit `req.body.isProfileCompleted` flag.
+   - Streamlined completion criteria for client and personal accounts.
+======================================================================
+
+
+3. src/controllers/jobsController.js (getJobs & getSavedJobs):
+   - Category & Functional Area Filter (filters.category / filters.functionalArea):
+     * Added first-class support for filtering by functionalArea & categories across Engineering, Design, Product, Marketing, Sales, and custom domains.
+     * Engineered intelligent semantic mapping:
+       - Engineering: Matches functionalArea (engineering/software/tech/dev) OR jobTitle (developer, engineer, frontend, backend, fullstack, devops, mobile, etc.) OR requiredSkills (react, node, python, etc.).
+       - Design: Matches functionalArea (design/creative/ui/ux) OR jobTitle (designer, ui, ux, graphic, product designer) OR requiredSkills (figma, adobe, prototyping, etc.).
+       - Product: Matches functionalArea (product) OR jobTitle (product manager, product owner, analyst).
+       - Marketing: Matches functionalArea (marketing/growth) OR jobTitle (marketing, growth, seo, content, social media) OR requiredSkills.
+       - Sales: Matches functionalArea (sales/business development) OR jobTitle (sales, bdr, sdr, account executive, revenue).
+       - Other / Custom Categories: Matches functionalArea, jobTitle, or requiredSkills dynamically.
+   - Expanded Keyword Search (filters.keyword):
+     * Expanded search scope beyond jobTitle and companyName to also search functionalArea, requiredSkills, jobLocation, and jobDescription.
+     * Preserved Phase A displayCompanyName masking and valid ObjectId lookups.
+   - Flexible Location Filter (filters.location):
+     * Now accepts either a string (e.g. "Bengaluru", "Remote", matching jobLocation or country) or an object ({ countries, states, cities }).
+   - Array & String Parsing for Multi-select Filters:
+     * filters.jobTypes / filters.jobType, filters.workMode, filters.requiredExperience / filters.experience, and filters.skills now accept both JavaScript arrays and comma-separated strings safely.
+   - Salary Range Filters (filters.salaryMin & filters.salaryMax):
+     * Added $gte and $lte numerical range filtering against job.salary.
+   - Freshness & Timeframe (filters.freshness / filters.postedWithin):
+     * Added parsing for "24h", "3 days", "7 days", "14 days", "30 days" as well as existing "last Ndays" format.
+   - Enhanced Sorting Options (req.query.sort / filters.sort):
+     * Added "salary" / "highestSalary" sorting by { salary: -1 }.
+     * Added "recent" / "createdAt" sorting by { createdAt: -1 }.
+   - Aggregation Pipeline Safety:
+     * Combined all $or filters cleanly into an andConditions array and merged them into query.$and, avoiding query overwrite bugs when multiple criteria are used simultaneously.
+======================================================================
+
+4. Database Seed - Marketing Jobs:
+   - Added 5 production-ready Marketing jobs mapped to verified active client companies:
+     * Growth & Performance Marketing Lead (CoderY) — ₹18 LPA | Hybrid (Bengaluru, Karnataka)
+     * Digital Marketing Specialist (Tekno pvt ltd) — ₹12 LPA | Remote (Gurugram, Haryana)
+     * Content & Social Media Marketing Manager (HFK) — ₹14 LPA | Hybrid (Mumbai, Maharashtra)
+     * Product Marketing Manager (XCVB) — ₹22 LPA | On-site (Bengaluru, Karnataka)
+     * SEO & Growth Specialist (CoderY) — ₹9.5 LPA | Remote (Noida, Uttar Pradesh)
+======================================================================
+
+5. Database Seed - Design, Product, and Sales Jobs:
+   - Added 9 verified, production-ready jobs across Design, Product, and Sales categories:
+     * Design:
+       - Senior Product Designer (UI/UX) (Vision Dg tech) — ₹16 LPA | Hybrid (Bengaluru, Karnataka)
+       - Lead UI/UX Designer (Neo Tech) — ₹22 LPA | Remote (Gurugram, Haryana)
+       - Visual & Brand Designer (Hydra Co) — ₹10 LPA | On-site (Mumbai, Maharashtra)
+     * Product:
+       - Associate Product Manager (Neogencode Technologies) — ₹15 LPA | Hybrid (Bengaluru, Karnataka)
+       - Senior Technical Product Manager (Tekno pvt ltd) — ₹28 LPA | Remote (Delhi NCR)
+       - Product Operations Analyst (CoderY) — ₹11 LPA | Hybrid (Hyderabad, Telangana)
+     * Sales:
+       - Enterprise Account Executive (SaaS) (Xpanzia) — ₹24 LPA | Hybrid (Bengaluru, Karnataka)
+       - Business Development Manager (HFK) — ₹14 LPA | On-site (Mumbai, Maharashtra)
+       - Inside Sales Specialist (NNGC) — ₹8 LPA | Remote (Delhi NCR)
+======================================================================
+
+6. src/controllers/jobsController.js (getjobDetailsById):
+   - Decoupled `isSaved` and `isApplied` evaluation from company KYC approval status, ensuring candidate save and application states are always accurately reflected in the job detail response.
+   - Preserved Phase A masking with `PHASE_A_COMPANY_NAME` for phaseA listings while safely falling back to user companyName / displayCompanyName for Phase B.
+   - Enriched response with `companySize` (`strengthOfCompany`), `isPremiumClient` (`subscriptionStatus`), and fallback client avatar.
+======================================================================
+
+7. src/models/jobsApplicationModel.js & src/controllers/jobsApplicationsController.js (addJobsApplications):
+   - Added support for 4-step Apply flow attributes on job applications:
+     * `coverNote`: candidate personalized note to the hiring team.
+     * `portfolioUrl`: optional public link to online design/engineering portfolio.
+     * `screeningAnswers`: flexible schema payload storing candidate responses to screening questions (e.g. work authorization, hybrid office comfort, notice period).
+   - In `addJobsApplications` controller, extracted `coverNote`, `portfolioUrl`, and `screeningAnswers` from `req.body` and persisted them in the `JobsApplication` record.
+======================================================================
+8. Latest Commit - Job Apply Flow (71e861d3046060caff273ff09a7e953d62c71486):
+   - Added support for cover notes, portfolio URLs, and screening answers in job applications.
+   - Added flexible `screeningAnswers` storage to the JobsApplication schema.
+   - Added fallback client resolution using the job's company/client identifiers.
+   - Added validation to return a 404 response when the requested job does not exist.
+   - Prevented duplicate applications for the same employee/job combination.
+   - Updated job application counters and `lastApplicationAt` timestamps.
+   - Added employer notifications and email alerts when a new application is submitted.
+   - Removed the unused circular dependency between the jobs and job applications controllers.
+
+
+======================================================================
+9. Profile Schema Expansion & Field Persistence (Experience, Education, Job Preferences)
+Date: 2026-10-27
+======================================================================
+
+1. Root Cause Analysis:
+   - In Mongoose, schemas have `strict: true` by default. Any field not explicitly declared in `UserSchema` is automatically and silently stripped upon `findOneAndUpdate` and `save`.
+   - `UserSchema` previously lacked definitions for candidate work experiences, education history, job preferences (desired role, work mode, preferred locations, expected compensation, employment type, notice period), professional headline (`title`/`headline`), location, bio, and social links.
+   - Consequently, when mobile clients or frontend users saved these fields via `POST /api/user/updateUserFields`, MongoDB dropped them. Upon subsequent `GET /api/user/profile` calls, the fields returned empty/undefined.
+
+2. Model Schema Expansion (`src/models/userModel.js`):
+   - Added explicit typed schema definitions for:
+     * `experienceDetails`, `experienceHistory`, `workExperience`: Array of work experiences (role, company, startDate, endDate, isCurrent, location, description).
+     * `educationDetails`, `educationHistory`: Array of education entries (institution, degree, field, startYear, endYear, location).
+     * `desiredRole`, `preferredRole`: Desired role preferences.
+     * `workMode`, `preferredWorkMode`, `workModes`: Multi-select work mode options (Remote, Hybrid, Onsite).
+     * `preferredLocations`, `preferredLocation`: Preferred geographical hubs.
+     * `expectedSalary`, `salary`: Candidate compensation expectations.
+     * `employmentType`: Employment type preferences (Full-time, Contract, Internship, Part-time).
+     * `noticePeriod`: Candidate availability timeframe.
+     * `fullName`, `title`, `headline`, `location`, `bio`: Personal identity & headline.
+     * `portfolioUrl`, `linkedinUrl`, `githubUrl`: Portfolio and external profile links.
+     * `recruiterViews`, `openToOffers`: Recruiter visibility and engagement counters.
+   - Enabled `{ strict: false }` on `UserSchema` to ensure forward compatibility with any future candidate attributes without field truncation.
+
+3. Controller Enhancements (`src/controllers/userController.js`):
+   - In `updateUserFields`:
+     * User identification now seamlessly falls back to `req.user?._id` or `req.user?.email` from the authenticated JWT session if not explicitly provided in `req.body.document`.
+     * Implemented automatic bidirectional syncing for aliases:
+       - `experienceDetails` <-> `workExperience` <-> `experienceHistory`
+       - `educationDetails` <-> `educationHistory`
+       - `title` <-> `headline` <-> `role`
+       - `desiredRole` <-> `preferredRole` <-> `role`
+       - `workMode` <-> `preferredWorkMode` <-> `workModes`
+       - `preferredLocations` <-> `preferredLocation`
+       - `expectedSalary` <-> `salary`
+       - `fullName` <-> `firstName` + `lastName`
+     * Switched update execution to atomic `{ $set: updateData }` using `findOneAndUpdate(filter, { $set: updateData }, { new: true, runValidators: false })`.
+   - In `getProfileDetails`:
+     * Returns a lean plain document (`.lean()`) with alias mappings guaranteed, ensuring mobile and web clients retrieve all fields consistently regardless of which alias key they query.
+======================================================================
+
+======================================================================
+10. Mobile Settings Screen Synchronization & Account Management Integration
+Date: 2026-10-27
+======================================================================
+
+1. Mobile Settings Screen Alignment (Stitch Project 1726662817988437509, Screen "15 - Settings"):
+   - Upgraded mobile Settings screen (`src/app/settings.tsx`) from generic static placeholder content to dynamic candidate profile synchronization.
+   - Synchronized all 6 screen sections:
+     * Candidate Summary Badge: Real profile photo/initials, dynamic verification badge, candidate name, active job seeker pill, headline, location, and dynamic Profile Score computation.
+     * Section 1 (Account & Security): Authenticated email display with verified status badge, live Password Update modal sheet, and Linked Accounts modal (Google / LinkedIn).
+     * Section 2 (Notifications & Alerts): Push notifications, Email notifications, and WhatsApp job alerts with SecureStore device caching and server state syncing.
+     * Section 3 (Preferences & Privacy): Dynamic Job Alerts criteria matching candidate's desired role, preferred location, and expected salary; Recruiter Discovery visibility toggle; App Language switcher modal with regional Indian languages (English India/US/UK, Hindi, Kannada, Tamil, Telugu).
+     * Section 4 (Support & About): 24/7 Priority Support contact sheet with direct email linking to support@hireinsecond.com; comprehensive candidate FAQs; About Hire in Second sheet with release specifications (v2.4.1 Build 890); Terms & Privacy Policy sheet compliant with India's Digital Personal Data Protection (DPDP) Act 2023.
+     * Section 5 (Log Out): Branded sign out action card with email confirmation prompt and session cache purge via clearSession().
+     * Section 6 (Danger Zone): Account deactivation card with live count of active recruiter applications retrieved from getMyApplications().
+
+2. Backend Endpoints & Data Contracts Utilized:
+   - `POST /api/user/updateUserFields`:
+     * Password Updates: Candidate enters new password which is received by `updateUserFields`, hashed with bcrypt (12 rounds), and persisted to MongoDB.
+     * Recruiter Discovery: Persists `openToOffers` boolean flag on the candidate's User document.
+     * Account Deactivation: Updates `status: false` upon confirmed account deletion request.
+   - `GET /api/user/profile` / `GET /api/user/getProfileDetails`:
+     * Supplies authenticated candidate identity, headline, location, job preferences, and completion metrics.
+   - `GET /api/jobsApplication/getMyApplications`:
+     * Supplies live active application count displayed in the Danger Zone deletion confirmation.
+======================================================================
+
+
+======================================================================
+Date: 2026-10-27
+Subject: Keyboard Avoidance Resolution, Connected Accounts & Availability Editing Synchronization
+======================================================================
+
+1. Keyboard Avoidance System (Android Edge-to-Edge & iOS):
+   - Resolved software keyboard overlay issues where soft keyboards (e.g. Gboard) completely obscured bottom sheet modals and multiline text areas (`Bio/Summary`, `Key Responsibilities & Impact`).
+   - Upgraded all bottom sheet modals (`SettingsScreen`, `ProfileTab`, `EditProfile`) with `statusBarTranslucent={true}`:
+     * Eliminates Android Dialog window sizing locks in edge-to-edge layouts.
+     * Integrates dynamic keyboard height insets (`paddingBottom: keyboardHeight`), smoothly elevating modal cards directly above soft keyboards upon input focus.
+   - Enhanced `useKeyboardAwareScroll`:
+     * Added native focus event measurement via `scrollResponderScrollNativeHandleToKeyboard`: automatically calculates layout offsets for text areas and scrolls them comfortably into view above the keyboard.
+     * Replaced fragile hardcoded scroll offsets in `src/app/edit-profile.tsx` with dynamic responsive measurement.
+
+2. Availability & Notice Period Management:
+   - Synchronized notice period options across `src/app/(tabs)/profile.tsx` and `src/app/edit-profile.tsx`:
+     * Options: `Immediate (0–15 days)`, `15 Days`, `30 Days`, `60 Days`, `90 Days`.
+   - Connected Recruiter Visibility toggle (`openToOffers`) in both Profile Availability modal and Edit Profile preferences.
+   - Persisted via `POST /api/user/updateUserFields` (`{ noticePeriod, openToOffers }`) with live UI reflection.
+
+3. Connected Accounts Integration:
+   - Added full OAuth / profile link synchronization for Google Account, LinkedIn Profile, and GitHub portfolio.
+   - Live URL normalization (`formatLinkedInUrl`, `formatGitHubUrl`), direct profile opening via `Linking.openURL`, and disconnection management.
+   - Persisted via `POST /api/user/updateUserFields` (`{ linkedinUrl, githubUrl }`).
+======================================================================
+
+======================================================================
+Date: 2026-10-27
+Subject: Backend Schema & Controller Updates for Connected Accounts, Notice Period & Availability Aliases
+======================================================================
+
+1. User Model Schema Updates (`src/models/userModel.js`):
+   - Explicitly declared schema fields for connected accounts and availability aliases:
+     * `availability`: String alias paired with `noticePeriod`.
+     * `linkedin`: String alias paired with `linkedinUrl`.
+     * `github`: String alias paired with `githubUrl`.
+     * `openToOffers`: Boolean flag (default `true`) for candidate recruiter visibility.
+   - Ensures MongoDB and Mongoose projection/sanitizers natively retain both field variations without depending solely on `{ strict: false }`.
+
+2. User Controller Aliasing & Synchronization (`src/controllers/userController.js`):
+   - In `getProfileDetails` (`GET /api/user/profile`):
+     * Ensures default `openToOffers: true` if unset on candidate document.
+     * Bi-directionally populates `linkedin` <-> `linkedinUrl`.
+     * Bi-directionally populates `github` <-> `githubUrl`.
+     * Bi-directionally populates `availability` <-> `noticePeriod`.
+   - In `updateUserFields` (`POST /api/user/updateUserFields`):
+     * Auto-syncs inbound aliases (`linkedin` <-> `linkedinUrl`, `github` <-> `githubUrl`, `availability` <-> `noticePeriod`).
+     * Casts and validates `openToOffers` as boolean.
+     * Sanitizes and mirrors aliases in the HTTP 200 response payload (`data`) so all clients (mobile and web) receive synchronized keys immediately.
+
+3. Process & Deployment:
+   - Verified 0 syntax errors (`node -c`).
+   - Nodemon auto-reloaded the changes on port 4000 (PID 23509).
+======================================================================
+
+======================================================================
+Date: 2026-10-28
+Subject: Connected Accounts Architecture, Schema Subdocument & Dedicated Endpoints
+======================================================================
+
+1. User Model Schema Updates (`src/models/userModel.js`):
+   - Added structured `connectedAccounts` subdocument schema:
+     * `google`: `{ connected: Boolean, email: String, id: String, connectedAt: Date }`
+     * `linkedin`: `{ connected: Boolean, url: String, username: String, connectedAt: Date }`
+     * `github`: `{ connected: Boolean, url: String, username: String, connectedAt: Date }`
+     * `portfolio`: `{ connected: Boolean, url: String, connectedAt: Date }`
+   - Added top-level `portfolioUrl` field for personal portfolios and developer websites.
+
+2. User Controller Integration (`src/controllers/userController.js`):
+   - In `getProfileDetails` (`GET /api/user/profile`):
+     * Dynamically builds and guarantees the structured `connectedAccounts` object combining stored subdocuments and legacy fields (`googleId`, `linkedinUrl`, `githubUrl`, `portfolioUrl`).
+   - In `updateUserFields` (`POST /api/user/updateUserFields`):
+     * Bidirectionally synchronizes updates between `connectedAccounts` subdocument and top-level fields (`linkedinUrl`/`linkedin`, `githubUrl`/`github`, `portfolioUrl`).
+   - In `editProfile` (`POST /api/user/editProfile`):
+     * Supported direct updates for `linkedinUrl`, `githubUrl`, `portfolioUrl`, and `connectedAccounts`.
+   - Added `updateConnectedAccounts` (`POST /api/user/connectedAccounts`):
+     * Accepts `{ service, url, username }` or `{ connectedAccounts }` to connect/update candidate social and portfolio accounts.
+   - Added `disconnectAccount` (`POST /api/user/disconnectAccount`):
+     * Accepts `{ service }` to cleanly unlink/disconnect an account and clear legacy mirror fields.
+
+3. Router Endpoints (`src/routers/userRouter.js`):
+   - `POST /api/user/connectedAccounts` (authorized via `userAuthorization`)
+   - `POST /api/user/disconnectAccount` (authorized via `userAuthorization`)
+
+4. Verification:
+   - Verified 0 syntax errors (`node -c`) on `userModel.js`, `userController.js`, and `userRouter.js`.
+   - Auto-reloaded and active on port 4000.
+======================================================================
+
+======================================================================
+Date: 2026-10-28
+Subject: Production Change Password Architecture & Dedicated Endpoint
+======================================================================
+
+1. Password Security Endpoint (`src/controllers/userController.js`):
+   - Added dedicated `changePassword` controller (`POST /api/user/changePassword`).
+   - Authenticated via JWT `userAuthorization`.
+   - Security verification flow:
+     * Validates candidate session and fetches user record.
+     * Checks if user already has an existing password (email/password registration):
+       - Requires `currentPassword`.
+       - Validates `currentPassword` against stored bcrypt hash via `bcrypt.compareSync`.
+       - Rejects incorrect passwords with HTTP 400: "Current password does not match our records."
+     * Accommodates OAuth/Google registered candidates (who don't have an initial password) by allowing seamless first-time password creation without prompting for an old password.
+     * Enforces minimum password length (>= 6 characters).
+     * Prevents reusing current password as new password.
+     * Hashes new password securely (bcrypt salt rounds 12) via Mongoose `pre("save")` hook upon `user.save()`.
+
+2. Router Integration (`src/routers/userRouter.js`):
+   - Registered `POST /api/user/changePassword` with `userAuthorization` middleware.
+
+3. Verification:
+   - Verified 0 syntax errors (`node -c`) across controllers and routers.
+   - Nodemon auto-reloaded and running on port 4000.
+======================================================================
+
+
+
+======================================================================
+13. CLIENT KYC CHECK & ATS LIFECYCLE ENFORCEMENT
+Date: 2026-10-28
+Context: Mobile Client Home & ATS Pipeline Wiring (Stitch Project 1726662817988437509)
+
+1. Client Lifecycle Routing & Verification Enforcement:
+   - Enforced client-side KYC check across all client routes based on user document `kycStatus`:
+     * Approved clients (`kycStatus: "approved"`):
+       - Access Stitch Screen 1 (Active ATS Dashboard: `ClientActiveOverviewScreen.tsx`)
+       - Active positions, candidate review triage queue, Google Meet calendar, and recent applications.
+     * Pending / Unverified clients (e.g. `nutandevi9891@gmail.com` where `kycStatus !== "approved"`):
+       - Automatically locked to Stitch Screen 2 (KYC Pending & Incomplete: `ClientKycPendingScreen.tsx`).
+       - Cannot publish active jobs or view unlocked candidate contact info.
+       - "Pipelines are Locked" banner on Applicants tab (`applicants.tsx`).
+       - Jobs created in `post-job.tsx` default to `status: "INACTIVE"` (Unpublished Drafts).
+       - Direct talent outreach locked in `talent.tsx`.
+   - Removed artificial preview toggles so verification status strictly controls client studio mode.
+   - Connected Representative Details modal to `POST /api/user/updateUserFields` allowing clients to add company legal name, designation, and phone.
+   - Connected Document Upload to `POST /api/upload` + `POST /api/user/update` moving client status to `inprogress`.
+
+2. Backend Meet Controller Updates (`src/controllers/meetController.js`):
+   - Added support for client interview query filtering and candidate details enrichment.
+======================================================================
+
+======================================================================
+14. CLIENT MY JOBS ENHANCEMENTS & ADVANCED SORT MATRIX
+Date: 2026-10-28
+Context: Client My Jobs Screen (Stitch Screen 5dfd07fe801748c096500dbe2a928c7e)
+
+1. Backend Sorting & Query Support (`src/controllers/jobsController.js`):
+   - Added server-side sort options to `getJobs` aggregation pipeline:
+     * `applicationsCount` / `mostApplications`: Sorts descending by total candidate applications (`{ applicationsCount: -1, createdAt: -1 }`).
+     * `positions` / `urgency`: Sorts descending by open requisition positions / hiring urgency (`{ positions: -1, createdAt: -1 }`).
+     * Preserved existing sorts: `salary` / `highestSalary`, `lastApplicationAt`, `lastInterviewAt`, and `recent` / `createdAt`.
+   - Verified synchronized real application counts and interview counts across candidate applications in `JobsApplication` model.
+   - Clean support for `status: "ALL"`, `status: "ACTIVE"`, `status: "INACTIVE"` enabling accurate requisition tabs (`All`, `Active`, `Deactivated`, `Urgent`).
+======================================================================
+
+
+======================================================================
+15. CLIENT REQUISITIONS, URGENCY CRITERIA & MATRIX FILTERS
+Date: 2026-10-28
+Context: Client My Jobs Screen (`src/app/(client-tabs)/jobs.tsx` & `ClientJobCard.tsx`)
+
+1. Urgent Hiring Priority Flag & Bug Fix:
+   - Root Cause: `isJobUrgent` previously inspected `notice.includes("immediate")`, which falsely marked all 8 active jobs as urgent because the default MongoDB string was "Immediate to 30 Days".
+   - Resolution:
+     * Refactored `isJobUrgent` to check explicit `job.isUrgent === true` or explicit keywords ("urgent", "immediate hiring", "critical").
+     * Added `isUrgent?: boolean` to `Job` interface.
+     * Added `⚡ Mark as Urgent` / `Remove Urgent Priority` fast-track action in `ClientJobCard` 3-dot overflow menu with real-time state toggle (`onToggleUrgent`).
+
+2. Requisition Matrix Filtering & Database Normalization:
+   - Work Mode Filter: Mapped "On-site" to match `"on-site"`, `"regular"`, and `"onsite"` stored across MongoDB legacy and modern records.
+   - Job Type Filter: Added `Internship` chip and normalized `"contract"` to match both `"contract-to-hire"` and `"contract based"`.
+   - Sponsorship Phase: Normalized `selectionType` and `jobTitle` to reliably filter `Phase A (NGC Blind)` and `Phase B (Direct Brand)`.
+   - Active Filter Badges: Added dismissible chip row under search bar allowing one-tap removal of active matrix filters or clearing all.
+
+3. NativeWind v4 Stability & Sort Indicators:
+   - Resolved `LinkingContext` runtime crashes by removing dynamic className string interpolation on segmented status buttons, sort modal, and filter matrix modal in favor of static classNames with direct `style={{ backgroundColor, color }}` mappings.
+   - Added visual active indicator dot to Sort (`⇅`) button when sorting by anything other than default newest.
+   - Verified 0 errors on `npx tsc --noEmit` and `npx expo lint`.
+======================================================================
+
+
+======================================================================
+16. SAVED JOBS END-TO-END RELIABILITY FIX
+Date: 2026-10-28
+Context: Mobile Home, Job Details, Saved Jobs tab, Profile count, and backend saved-job APIs
+
+1. Root causes identified:
+   - The mobile Saved Jobs tab requested only page 1 with `pageSize: 50`, so any later pages were never shown.
+   - `GET /api/getSavedJobs` filtered saved records to `status: "ACTIVE"` and `positions > 0`. Jobs disappeared from Saved Jobs as soon as they were closed, deactivated, or filled, even though the user's saved record still existed.
+   - Saved jobs were sorted by the job posting creation date instead of the date the user saved them.
+   - Saved-job endpoints trusted a request-supplied `userId` instead of consistently using the authenticated Passport user, allowing ownership mismatches.
+   - Home/Jobs card bookmark state lived inside each card. Duplicate representations of the same job (featured and recent) could show different bookmark states, and refreshed job props did not reliably update local state.
+   - The Saved tab optimistically removed a job but did not restore it when the backend unsave request failed.
+
+2. Backend fixes (`src/controllers/jobsController.js`):
+   - `upsertSavedJob` now derives ownership from `req.user._id`, rejects a mismatched supplied user ID with HTTP 403, validates `jobId` and `isSaved`, and rejects attempts to save missing jobs.
+   - Re-saving updates the saved timestamp so "Recently saved" reflects the user's actual action.
+   - Legacy duplicate records for the same user/job pair are removed after a successful upsert.
+   - Job-feed/detail bookmark checks now look specifically for an `isSaved: true` record, so a legacy duplicate false record cannot hide a valid saved state.
+   - `getSavedJobs` and legacy `getSavedJobsByUserId` now enforce authenticated ownership.
+   - Removed the ACTIVE-status and positive-position restrictions from saved-job retrieval. Every still-existing saved job is returned, including inactive/closed roles.
+   - Deduplicated legacy saved entries, ignored invalid/stale job IDs safely, ordered results by saved timestamp, retained existing web filter support, and capped individual API pages at 100.
+   - Added `savedAt` to each result and `totalCount` to the response while preserving pagination.
+   - Replaced raw database error-object responses with stable client-safe failure messages.
+
+3. Mobile fixes (`hireinsecondmobile`):
+   - Added `getAllSavedJobs` in `src/api/jobs.ts` to request every saved-job page and deduplicate results before rendering.
+   - Updated `src/app/(tabs)/saved.tsx` to load all pages on focus, report load failures, use the real saved timestamp, and restore an optimistically removed item if unsaving fails.
+   - Closed/deactivated/filled saved roles remain visible as requested, display an "Applications closed" state, and cannot launch the apply flow.
+   - Updated `JobCard` and `FeaturedJobCard` to use parent-controlled bookmark state, keeping Home featured/recent cards and the Jobs tab synchronized. Duplicate taps are blocked while save requests are pending, with optimistic state rolled back on failure.
+   - Updated Job Details to block duplicate save requests and to show a disabled "Applications Closed" action for closed saved roles.
+   - Updated the Profile saved count to use backend `totalCount` instead of the length of only the first page.
+   - Added the approved design record at `docs/superpowers/specs/2026-10-28-saved-jobs-fix-design.md`.
+
+4. Automated verification:
+   - Added `src/controllers/jobsController.test.js` using Node's built-in test runner.
+   - `npm test`: 2/2 backend tests passed (cross-user write rejection; closed saved-role retrieval with saved timestamp).
+   - `node --check src/controllers/jobsController.js`: passed.
+   - `node --check src/controllers/jobsController.test.js`: passed.
+   - `npx tsc --noEmit`: passed with zero TypeScript errors.
+   - `npx expo lint`: passed with zero errors. Two pre-existing warnings remain in `src/api/client.ts` and `src/lib/googleAuth.ts`; neither is related to saved jobs.
+   - `git diff --check`: passed in both mobile and backend repositories.
+
+5. Compatibility and data notes:
+   - Existing request payloads may continue sending `userId`, but it must match the authenticated account.
+   - Existing web saved-job keyword/filter/pagination behavior was retained.
+   - No dependency or database migration was added. Legacy duplicates are repaired opportunistically the next time that user/job save state is updated.
+   - Existing unrelated urgency/requisition edits already present in `jobsController.js`, `jobsModel.js`, and earlier `Update.txt` sections were preserved.
+======================================================================
+
+
+======================================================================
+Update by meghapant: Display Meeting ID, Passcode, and Join Meeting Action on Interview Card
+Date: 2026-10-29
+
+1. Files Modified:
+   - `hireinsecond/components/job-single-pages/shared-components/InterviewScheduleCard.jsx`
+
+2. Summary of Changes:
+   - Added a dedicated, styled container inside the interview card to display:
+     * Meeting ID (`interview.meetingId`) with a one-click copy button.
+     * Passcode (`interview.password`) with a one-click copy button.
+     * Direct "Join Meeting" button (`interview.meetingLink` for client host, `interview.joinUrl` for candidate attendee) that opens the meeting in a new tab.
+     * "Copy Link" button to easily copy the meeting URL.
+   - Ensured the Join action and meeting credentials remain accessible to users without gating behind candidate acceptance status.
+
+3. Verification:
+   - TypeScript compilation check (`npx tsc --noEmit`): 0 errors.
+   - Frontend server check: HTTP 200 OK.
+======================================================================
+
+======================================================================
+Update by meghapant: Fixed Zoom Meeting URLs and Admin/Host Identity Issue Across Backend, Frontend, and Mobile
+Date: 2026-10-29
+
+1. Root Cause:
+   - When Zoom meetings were scheduled, `zoomData.start_url` (containing the host `zak` token of account owner Rahul Jha) was being saved as `meetingLink`.
+   - Web dashboards (client, jobseeker, vendor) and mobile applications opened `meetingLink`, which forced whoever clicked the link to join logged in as Admin "Rahul Jha".
+
+2. Backend Fixes (`hireinsecondback`):
+   - `src/models/mettingModel.js`: Added `startUrl: { type: String }` to isolate host start links.
+   - `src/controllers/meetController.js`:
+     * Updated `addInterview` to store `meetingLink: zoomData.join_url` (clean attendee join URL) and `startUrl: zoomData.start_url`.
+     * Updated `getInterviewList` and `getInterviewById` to sanitize returned objects so attendees/clients are never served admin `start_url` containing `/s/` or `zak=`.
+   - Executed database migration script to update existing `JobsInterview` documents, safely setting `meetingLink = joinUrl` and archiving any `start_url` into `startUrl`.
+
+3. Frontend Fixes (`hireinsecond`):
+   - `components/job-single-pages/shared-components/InterviewScheduleCard.jsx`:
+     * Prioritized `joinUrl` over `meetingLink` and stripped any host `start_url`.
+     * Pre-filled `&uname=` parameter with participant display name.
+     * Fixed the card's join button to open the sanitized meeting URL.
+   - `components/dashboard-pages/jobseeker-dashboard/interview-lists/components/JobListingTable.jsx`: Updated join click handler to use `item.joinUrl || item.meetingLink`.
+   - `components/dashboard-pages/jobseeker-dashboard/interviews/components/InterviewGrid.tsx`: Updated table action to open `original.joinUrl || props.getValue()`.
+   - `app/jobseeker-dashboard/applications/[appId]/IndexClient.tsx`: Updated join call button href to `interview.joinUrl || interview.meetingLink`.
+   - `components/dashboard-pages/vendor-company-dashboard/interview-lists/components/JobListingTable.jsx`: Updated to use `item.joinUrl || item.meetingLink`.
+   - `components/dashboard-pages/vendor-individual-dashboard/interview-lists/components/JobListingTable.jsx`: Updated to use `item.joinUrl || item.meetingLink`.
+   - `components/dashboard-pages/client-dashboard/interview-lists/components/JobListingTable.jsx`: Updated to use `item.joinUrl || item.meetingLink`.
+   - `components/dashboard-pages/client-dashboard/interviews/components/InterviewGrid.tsx`: Updated to use `props.row.original?.joinUrl || props.getValue()`.
+
+4. Mobile Fixes (`hireinsecondmobile`):
+   - `src/app/(tabs)/applications.tsx`: Prioritized `item.latestInterview.joinUrl || item.latestInterview.meetingLink`.
+   - `src/app/applications/[id].tsx`: Prioritized `latestInterview.joinUrl || latestInterview.meetingLink`.
+
+5. Verification:
+   - Backend unit test suite: 4/4 tests passed (`npm test`).
+   - Web frontend TypeScript check: 0 errors (`npx tsc --noEmit`).
+   - Mobile app TypeScript check: 0 errors (`npx tsc --noEmit`).
+   - Database verification: All existing active interview documents verified pointing to clean attendee `/j/` URLs.
+======================================================================
+
+======================================================================
+Update by meghapant: Formatted Raw JSON Interviewer Email in Mobile App
+Date: 2026-10-29
+
+1. Issue:
+   - In the mobile app's "My Applications" screen and "Application Detail" screen, the scheduled interview's interviewer list was rendering as raw JSON string `[{"email":"MEGHAPANT195@GMAIL.COM"}]` instead of clean email address(es).
+
+2. Fixes Implemented:
+   - `hireinsecondmobile/src/lib/format.ts`:
+     * Added `formatInterviewers(interviewers)` helper function to parse raw JSON arrays/objects, clean comma-separated strings, or arrays of objects into clean, comma-separated email addresses.
+   - `hireinsecondmobile/src/app/(tabs)/applications.tsx`:
+     * Applied `formatInterviewers` to `item.latestInterview.interviewers` so it displays `29-Oct-2026, 11:30 am • MEGHAPANT195@GMAIL.COM` cleanly without JSON brackets or quotes.
+   - `hireinsecondmobile/src/app/applications/[id].tsx`:
+     * Applied `formatInterviewers` to `latestInterview.interviewers`.
+   - `hireinsecond/components/job-single-pages/shared-components/ScheduleForm.jsx`:
+     * Added defensive parsing for `interviewers` to support strings, parsed objects, and arrays without throwing errors.
+
+3. Verification:
+   - `hireinsecondmobile`: `npx tsc --noEmit` passed with 0 errors.
+   - `hireinsecond`: `npx tsc --noEmit` passed with 0 errors.
+   - `hireinsecondback`: `npm test` passed 4/4 tests.
+======================================================================
+
+======================================================================
+Update by meghapant: Integrated and Combined Sahil's and Megha's Authentication & Onboarding Logic
+Date: 2026-10-30
+
+1. Overview:
+   - Harmonized authentication middleware, OTP flows, and onboarding endpoints between Sahil's commit (user thing / mobile OTP & Google signup support) and Megha's branch (input validation, Google user safeguards, location autocomplete, and job-seeker onboarding API documentation).
+
+2. Key Integrations & Fixes:
+   - `src/middlewares/user/loginMiddleware.js`:
+     * Combined Sahil's 404 response (`userNotFound: true`, "No account found with this email. Please sign up to create an account.") and password check error messages with Megha's defensive input validations (trimmed email, required password, case-insensitive email query).
+     * Retained Google account check: users registered via Google receive a clear 400 prompt to sign in with Google.
+     * Retained passwordless and deactivation checks: accounts without password receive 401 prompt; deactivated accounts receive clean 401 status.
+     * Retained 302 response with user `id` for unverified email accounts to allow smooth redirection to OTP verification.
+     * Guaranteed consistent response contract with both `message` and `error` attributes.
+   - `src/controllers/userController.js`:
+     * Preserved Sahil's `loginWithMobile` provisional account auto-creation and Fast2SMS dispatch.
+     * Ensured response contracts supply `message: "OTP sent successfully"`, `userId`, and `isNew`.
+   - `src/controllers/locationcontroller.js` & `src/routers/locationRouter.js`:
+     * Added `getLocalities` endpoint (`/api/location/getLocalities` & `/api/getLocalities`) supporting Google Places API (New) with fallback to curated tech-city localities and Nominatim.
+   - `jobseeker.md`:
+     * Added comprehensive onboarding API reference documentation.
+   - Unit Tests:
+     * Added full test coverage for `loginMiddleware` in `test/loginMiddleware.test.js` (8 test cases).
+     * Added unit tests for `locationController.getLocalities` in `test/locationController.test.js` (3 test cases).
+
+3. Verification:
+   - Backend unit tests: 15/15 passed (`npm test`).
+======================================================================

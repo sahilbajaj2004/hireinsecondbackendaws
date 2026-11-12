@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+
+# Environment variables and local secrets
+.env
+.env.*
+!.env.example
+secrets/
+
+# Runtime uploads, generated files, and local backups
+public/temp/
+backups/
+uploads/
+*.log
+
+# Test and build output
+coverage/
+dist/
+build/
+.cache/
+
+# Local editor and operating system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+
+
+
