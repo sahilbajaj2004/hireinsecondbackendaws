@@ -700,6 +700,7 @@ const getAdminJobs = async (req, res) => {
     let query = {
       $expr: { $gt: [{ $toInt: "$positions" }, 0] },
     };
+    const andConditions = [];
 
     // Status filter (defaults to ACTIVE if not provided)
     // Use "ALL" to return jobs of all statuses

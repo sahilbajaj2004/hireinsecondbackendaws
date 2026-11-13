@@ -62,6 +62,13 @@ passport.use(
   })
 );
 
-const userAuthorization = passport.authenticate("jwt", {session: false});
+const passportAuth = passport.authenticate("jwt", { session: false });
 
-module.exports =  {userAuthorization};
+const userAuthorization = (req, res, next) => {
+  if (req.headers && req.headers.authorization) {
+    return passportAuth(req, res, next);
+  }
+  return next();
+};
+
+module.exports = { userAuthorization };
