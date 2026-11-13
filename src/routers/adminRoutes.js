@@ -6,6 +6,10 @@ const {
   getJobApplicationForAdminUserWise,
   registerClient,
   getJobApplicationsForAdmin,
+  getBroadcastAudienceCounts,
+  searchUsersForPush,
+  sendAdminPushNotification,
+  getBroadcastHistory,
 } = require("../controllers/adminControllers");
 const { getJobDataForAdmin } = require("../controllers/adminControllers");
 const {
@@ -42,4 +46,11 @@ router.get("/getBlogsById/:id", getBlogsById);
 router.get("/getJobApplicationsForAdmin", userAuthorization, getJobApplicationsForAdmin);
 
 router.post("/registerClient", userAuthorization, registerClient);
+
+// Push Notification & Broadcasts
+router.get("/broadcast/counts", userAuthorization, getBroadcastAudienceCounts);
+router.get("/broadcast/search-users", userAuthorization, searchUsersForPush);
+router.post("/broadcast/send", userAuthorization, sendAdminPushNotification);
+router.get("/broadcast/history", userAuthorization, getBroadcastHistory);
+
 module.exports = router;

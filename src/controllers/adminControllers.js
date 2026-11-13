@@ -9,6 +9,12 @@ const JobsApplications = require("../models/jobsApplicationModel");
 const Jobs = require("../models/jobsModel");
 const Users = require("../models/userModel");
 const User = require("../models/userModel");
+const Notifications = require("../models/notificatonModel");
+const BroadcastLog = require("../models/broadcastLogModel");
+const {
+  sendPushNotification,
+  sendBatchPushNotifications,
+} = require("../helpers/pushNotificationHelper");
 const {
   getJobslist,
   getVendorlist,
@@ -743,11 +749,281 @@ const registerClient = async (req, res) => {
     res.status(500).json({ success: false, error });
   }
 };
+
+/**
+ * Return audience statistics for push broadcast (total count + count with valid push tokens).
+ */
+const getBroadcastAudienceCounts = async (req, res) => {
+  try {
+    const isTokenValid = {
+      pushNotif: { $ne: false },
+      pushToken: { $regex: /^Expo(nent)?PushToken\[/ },
+    };
+
+    const [
+      totalAll,
+      tokensAll,
+      totalJobSeekers,
+      tokensJobSeekers,
+      totalClients,
+      tokensClients,
+      totalPartners,
+      tokensPartners,
+    ] = await Promise.all([
+      User.countDocuments({ status: true }),
+      User.countDocuments({ status: true, ...isTokenValid }),
+      User.countDocuments({ status: true, userType: "personal" }),
+      User.countDocuments({ status: true, userType: "personal", ...isTokenValid }),
+      User.countDocuments({ status: true, userType: "client" }),
+      User.countDocuments({ status: true, userType: "client", ...isTokenValid }),
+      User.countDocuments({ status: true, userType: { $in: ["company", "individual"] } }),
+      User.countDocuments({
+        status: true,
+        userType: { $in: ["company", "individual"] },
+        ...isTokenValid,
+      }),
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      counts: {
+        all: { total: totalAll, withToken: tokensAll },
+        jobseekers: { total: totalJobSeekers, withToken: tokensJobSeekers },
+        clients: { total: totalClients, withToken: tokensClients },
+        partners: { total: totalPartners, withToken: tokensPartners },
+      },
+    });
+  } catch (error) {
+    console.error("Error in getBroadcastAudienceCounts:", error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+/**
+ * Search users by name/email/phone for single-user push targeting.
+ */
+const searchUsersForPush = async (req, res) => {
+  try {
+    const q = String(req.query.q || "").trim();
+    if (!q || q.length < 2) {
+      return res.status(200).json({ success: true, users: [] });
+    }
+
+    const regex = new RegExp(q, "i");
+    const users = await User.find({
+      $or: [
+        { firstName: regex },
+        { lastName: regex },
+        { email: regex },
+        { phone: regex },
+        { companyName: regex },
+      ],
+    })
+      .select("firstName lastName email phone userType companyName pushToken pushNotif")
+      .limit(20)
+      .lean();
+
+    const formatted = users.map((u) => {
+      const hasToken =
+        Boolean(u.pushToken) &&
+        (u.pushToken.startsWith("ExponentPushToken[") || u.pushToken.startsWith("ExpoPushToken["));
+      return {
+        _id: u._id,
+        name: `${u.firstName || ""} ${u.lastName || ""}`.trim() || u.companyName || u.email,
+        email: u.email,
+        phone: u.phone,
+        userType: u.userType,
+        companyName: u.companyName,
+        hasPushToken: hasToken,
+        pushNotif: u.pushNotif !== false,
+      };
+    });
+
+    return res.status(200).json({ success: true, users: formatted });
+  } catch (error) {
+    console.error("Error in searchUsersForPush:", error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+/**
+ * Send push notification to a single user or broadcast to segments (jobseekers, clients, partners, all).
+ */
+const sendAdminPushNotification = async (req, res) => {
+  try {
+    const { target, userId, title, body, deepLink, saveInApp = true } = req.body;
+
+    if (!title || !title.trim()) {
+      return res.status(400).json({ success: false, error: "Notification title is required" });
+    }
+    if (!body || !body.trim()) {
+      return res.status(400).json({ success: false, error: "Notification message body is required" });
+    }
+    if (!target || !["all", "jobseekers", "clients", "partners", "single"].includes(target)) {
+      return res.status(400).json({ success: false, error: "Valid target audience is required" });
+    }
+
+    let targetQuery = {};
+    let targetUserName = null;
+    let targetUserEmail = null;
+
+    if (target === "single") {
+      if (!userId) {
+        return res.status(400).json({ success: false, error: "Target userId is required for single-user push" });
+      }
+      targetQuery = { _id: userId };
+    } else if (target === "jobseekers") {
+      targetQuery = { userType: "personal", status: true };
+    } else if (target === "clients") {
+      targetQuery = { userType: "client", status: true };
+    } else if (target === "partners") {
+      targetQuery = { userType: { $in: ["company", "individual"] }, status: true };
+    } else if (target === "all") {
+      targetQuery = { status: true };
+    }
+
+    // Fetch targeted users
+    const users = await User.find(targetQuery)
+      .select("_id firstName lastName email companyName pushToken pushNotif")
+      .lean();
+
+    const totalTargeted = users.length;
+    if (totalTargeted === 0) {
+      return res.status(404).json({ success: false, error: "No matching active users found for this target." });
+    }
+
+    if (target === "single" && users[0]) {
+      const u = users[0];
+      targetUserName = `${u.firstName || ""} ${u.lastName || ""}`.trim() || u.companyName || u.email;
+      targetUserEmail = u.email;
+    }
+
+    // Filter recipients eligible for Expo Push Notifications
+    const pushEligibleUsers = users.filter((u) => {
+      if (u.pushNotif === false) return false;
+      const tok = String(u.pushToken || "").trim();
+      return tok.startsWith("ExponentPushToken[") || tok.startsWith("ExpoPushToken[");
+    });
+
+    const tokensCount = pushEligibleUsers.length;
+
+    // Prepare push notification messages
+    const pushMessages = pushEligibleUsers.map((u) => ({
+      to: u.pushToken,
+      title: title.trim(),
+      body: body.trim(),
+      data: {
+        deepLink: deepLink || "/notifications",
+        type: "ADMIN_BROADCAST",
+      },
+    }));
+
+    // Dispatch batch push notifications via Expo API
+    let deliveredCount = 0;
+    if (pushMessages.length > 0) {
+      const batchResult = await sendBatchPushNotifications(pushMessages);
+      deliveredCount = batchResult.deliveredCount;
+    }
+
+    // Save In-App Notification in bulk (if saveInApp is enabled)
+    if (saveInApp !== false) {
+      const inAppDocs = users.map((u) => ({
+        userId: String(u._id),
+        type: "ADMIN_BROADCAST",
+        title: title.trim(),
+        details: body.trim(),
+        status: "New",
+        notificationDetail: deepLink || "/notifications",
+        sentAt: new Date(),
+        isClear: false,
+      }));
+
+      // Insert in chunks of 500 to avoid overloading Mongo
+      const CHUNK = 500;
+      for (let i = 0; i < inAppDocs.length; i += CHUNK) {
+        const docChunk = inAppDocs.slice(i, i + CHUNK);
+        await Notifications.insertMany(docChunk, { ordered: false }).catch((err) => {
+          console.warn("[AdminPush] Error bulk inserting in-app notifications chunk:", err?.message);
+        });
+      }
+    }
+
+    // Log the broadcast in BroadcastLog
+    const logDoc = await BroadcastLog.create({
+      title: title.trim(),
+      body: body.trim(),
+      target,
+      targetUserId: target === "single" ? userId : null,
+      targetUserName,
+      targetUserEmail,
+      deepLink: deepLink || "",
+      totalTargeted,
+      tokensCount,
+      deliveredCount,
+      sentBy: req.user?._id || null,
+      status: deliveredCount > 0 || tokensCount === 0 ? "DELIVERED" : "PARTIAL",
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: `Notification successfully processed. Targeted ${totalTargeted} users, dispatched ${deliveredCount} push notifications.`,
+      data: {
+        broadcastId: logDoc._id,
+        totalTargeted,
+        tokensCount,
+        deliveredCount,
+      },
+    });
+  } catch (error) {
+    console.error("Error in sendAdminPushNotification:", error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+/**
+ * Get paginated history of past broadcasts.
+ */
+const getBroadcastHistory = async (req, res) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.max(1, Math.min(100, parseInt(req.query.limit, 10) || 10));
+    const skip = (page - 1) * limit;
+
+    const [total, list] = await Promise.all([
+      BroadcastLog.countDocuments({}),
+      BroadcastLog.find({})
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .populate("sentBy", "firstName lastName email")
+        .lean(),
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      list,
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit) || 1,
+      },
+    });
+  } catch (error) {
+    console.error("Error in getBroadcastHistory:", error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+};
+
 module.exports = {
   getUsersDataForAdmin,
   getJobDataForAdmin,
   getJobApplicationsAdmin,
   getJobApplicationForAdminUserWise,
   registerClient,
-  getJobApplicationsForAdmin
+  getJobApplicationsForAdmin,
+  getBroadcastAudienceCounts,
+  searchUsersForPush,
+  sendAdminPushNotification,
+  getBroadcastHistory,
 };

@@ -64,6 +64,80 @@ async function sendPushNotification({ userId, title, body, data }) {
   }
 }
 
+/**
+ * Dispatches an array of pre-filtered Expo push notifications in chunks of 100.
+ * @param {Array<{ to: string, title: string, body: string, data?: object }>} messages
+ * @returns {Promise<{ deliveredCount: number, errorCount: number, tickets: Array }>}
+ */
+async function sendBatchPushNotifications(messages) {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return { deliveredCount: 0, errorCount: 0, tickets: [] };
+  }
+
+  // Filter valid tokens only
+  const validMessages = messages
+    .filter((m) => {
+      const token = String(m?.to || "").trim();
+      return token.startsWith("ExponentPushToken[") || token.startsWith("ExpoPushToken[");
+    })
+    .map((m) => ({
+      to: String(m.to).trim(),
+      sound: "default",
+      title: m.title || "HireInSecond Notification",
+      body: m.body || "",
+      data: m.data || {},
+      priority: "high",
+      channelId: "default",
+      color: "#48a7bb",
+      _displayInForeground: true,
+    }));
+
+  if (validMessages.length === 0) {
+    return { deliveredCount: 0, errorCount: 0, tickets: [] };
+  }
+
+  const CHUNK_SIZE = 100;
+  let deliveredCount = 0;
+  let errorCount = 0;
+  const allTickets = [];
+
+  for (let i = 0; i < validMessages.length; i += CHUNK_SIZE) {
+    const chunk = validMessages.slice(i, i + CHUNK_SIZE);
+    try {
+      const response = await axios.post("https://exp.host/--/api/v2/push/send", chunk, {
+        headers: {
+          Accept: "application/json",
+          "Accept-encoding": "gzip, deflate",
+          "Content-Type": "application/json",
+        },
+        timeout: 15000,
+      });
+
+      if (response.data && Array.isArray(response.data.data)) {
+        response.data.data.forEach((ticket) => {
+          if (ticket.status === "ok") {
+            deliveredCount++;
+          } else {
+            errorCount++;
+          }
+          allTickets.push(ticket);
+        });
+      } else {
+        deliveredCount += chunk.length;
+      }
+    } catch (err) {
+      console.error("[PushNotification] Error sending Expo push chunk:", err?.message);
+      errorCount += chunk.length;
+    }
+  }
+
+  console.log(
+    `[PushNotification] Batch completed: ${deliveredCount} delivered, ${errorCount} errors out of ${validMessages.length} total.`
+  );
+  return { deliveredCount, errorCount, tickets: allTickets };
+}
+
 module.exports = {
   sendPushNotification,
+  sendBatchPushNotifications,
 };
