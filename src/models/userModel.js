@@ -31,6 +31,14 @@ const UserSchema = Schema({
     required: true,
     default: false,
   },
+  pushToken: {
+    type: String,
+    default: null,
+  },
+  pushNotif: {
+    type: Boolean,
+    default: true,
+  },
   skills: {
     type: mongoose.Schema.Types.Mixed,
     default: "",
