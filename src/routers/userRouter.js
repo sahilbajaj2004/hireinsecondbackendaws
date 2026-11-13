@@ -15,6 +15,7 @@ const {
   getUserStatus,
   updateKYCFromAdmin,
   deactivateUser,
+  deleteAccount,
   editProfile,
   resetPassword,
   updateResume,
@@ -81,6 +82,8 @@ router.get("/getAdminUsersV2", userAuthorization, getAdminUsersV2);
 router.get("/getUserStatus/:id", userAuthorization, getUserStatus);
 router.post("/updateKYCFromAdmin", userAuthorization, updateKYCFromAdmin);
 router.post("/deactivateUser", userAuthorization, deactivateUser);
+router.post("/deleteAccount", userAuthorization, deleteAccount);
+router.delete("/deleteAccount", userAuthorization, deleteAccount);
 router.post("/editProfile", userAuthorization, editProfile);
 router.post("/resetPassword", resetPassword);
 router.post("/updateResume", userAuthorization, updateResume);

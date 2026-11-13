@@ -1890,6 +1890,54 @@ const deactivateUser = async (req, res) => {
     res.status(500).json({ success: false, error });
   }
 };
+
+const deleteAccount = async (req, res) => {
+  try {
+    const userId = req.user?._id || req.body?.userId || req.body?.id;
+    const userEmail = req.user?.email || req.body?.email;
+
+    let user = null;
+    if (userId) {
+      user = await User.findById(userId);
+    } else if (userEmail) {
+      user = await User.findOne({ email: userEmail });
+    }
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User account not found",
+      });
+    }
+
+    const deletedId = user._id;
+
+    // Permanently remove the user record
+    await User.findByIdAndDelete(deletedId);
+
+    // Optional cleanup of saved jobs
+    try {
+      const SavedJobs = require("../models/savedJobs");
+      if (SavedJobs) {
+        await SavedJobs.deleteMany({ userId: String(deletedId) });
+      }
+    } catch (cleanErr) {
+      console.warn("Cleanup error during user deletion:", cleanErr?.message);
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Account deleted successfully",
+    });
+  } catch (error) {
+    console.error("Error in deleteAccount:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to delete account",
+      error: error?.message || "Internal server error",
+    });
+  }
+};
 const resetPassword = async (req, res) => {
   try {
     const { password, id } = req.body;
@@ -2413,6 +2461,7 @@ module.exports = {
   getAdminUsers,
   getUserStatus,
   deactivateUser,
+  deleteAccount,
   updateKYCFromAdmin,
   editProfile,
   resetPassword,
