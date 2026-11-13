@@ -42,6 +42,7 @@ async function sendPushNotification({ userId, title, body, data }) {
       priority: "high",
       channelId: "default",
       color: "#48a7bb",
+      _displayInForeground: true,
     };
 
     console.log(`[PushNotification] Dispatching push to user ${userId} (${token}):`, title);
