@@ -123,6 +123,147 @@ router.post("/google", async (req, res) => {
     }
 });
 
+/**
+ * Native Mobile Sign In with Apple (iOS)
+ * POST /api/auth/apple
+ * 
+ * ⚠️ STATUS: [INCOMPLETE / SCAFFOLD]
+ * Pending Apple Developer Program enrollment and credential setup.
+ *
+ * -----------------------------------------------------------------------------------------
+ * WHAT IS NEEDED FROM APPLE DEVELOPER ACCOUNT TO FINALIZE THIS ENDPOINT:
+ * -----------------------------------------------------------------------------------------
+ * 1. Apple Developer Team ID (10-character alphanumeric string, e.g. "ABC123DEFG")
+ * 2. Apple Client IDs / Bundle IDs:
+ *    - Candidate App: "com.hireinsecond"
+ *    - Client App:    "com.hireinsecondclient"
+ *    - Partner App:   "com.hireinsecondpartner"
+ * 3. Apple Key ID (from Certificates, Identifiers & Profiles -> Keys -> "Sign in with Apple")
+ * 4. Apple Private Key (.p8 file downloaded from Apple Developer Portal)
+ * 5. NPM Package: `apple-signin-auth` or `jwks-rsa` to verify identityToken against
+ *    Apple's public keys at https://appleid.apple.com/auth/keys
+ * -----------------------------------------------------------------------------------------
+ *
+ * Request Body:
+ * {
+ *   "identityToken": "<jwt_string_from_apple>",   // Apple signed JWT
+ *   "authorizationCode": "<auth_code_from_apple>", // (Optional) for refresh token exchange
+ *   "userType": "personal" | "client",             // Portal role
+ *   "fullName": { "givenName": "...", "familyName": "..." }, // Sent by Apple ONLY on first sign-in
+ *   "email": "user@privaterelay.appleid.com"       // Sent by Apple ONLY on first sign-in
+ * }
+ */
+router.post("/apple", async (req, res) => {
+    try {
+        const {
+            identityToken,
+            authorizationCode,
+            userType = "personal",
+            fullName,
+            email: initialEmail,
+        } = req.body;
+
+        if (!identityToken) {
+            return res.status(400).json({
+                success: false,
+                message: "identityToken is required for Apple authentication",
+            });
+        }
+
+        // Decode unverified payload for preliminary user ID extraction while Apple verification is pending
+        let appleSub = null;
+        let tokenEmail = null;
+
+        try {
+            // Safely parse the unverified JWT payload (base64)
+            const parts = identityToken.split(".");
+            if (parts.length === 3) {
+                const decodedPayload = JSON.parse(Buffer.from(parts[1], "base64").toString("utf8"));
+                appleSub = decodedPayload.sub || null;
+                tokenEmail = decodedPayload.email || null;
+            }
+        } catch (decodeErr) {
+            console.warn("Could not parse identityToken payload:", decodeErr?.message);
+        }
+
+        if (!appleSub) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid Apple identityToken structure",
+            });
+        }
+
+        const email = (initialEmail || tokenEmail || "").toLowerCase();
+        const firstName = fullName?.givenName || "";
+        const lastName = fullName?.familyName || "";
+
+        let isNewUser = false;
+        // Search by appleId (stored in sub) or existing email
+        let user = await Users.findOne({ appleId: appleSub });
+        if (!user && email) {
+            user = await Users.findOne({ email });
+            if (user) {
+                user.appleId = appleSub;
+                await user.save();
+            }
+        }
+
+        if (user) {
+            if (user.status === false) {
+                return res.status(401).json({
+                    success: false,
+                    message: "Your account is deactivated, please contact support team",
+                });
+            }
+
+            const conflict = checkRoleConflict(user.userType, userType);
+            if (conflict) {
+                return res.status(400).json({
+                    success: false,
+                    code: "ROLE_CONFLICT",
+                    message: conflict,
+                });
+            }
+        } else {
+            isNewUser = true;
+            user = await Users.create({
+                appleId: appleSub,
+                firstName: firstName || "Apple",
+                lastName: lastName || "User",
+                email: email || `${appleSub}@privaterelay.appleid.com`,
+                userType,
+                status: true,
+                otpVerified: true,
+                isProfileCompleted: false,
+            });
+        }
+
+        const token = generateToken({
+            id: user._id,
+            email: user.email,
+            userType: user.userType,
+        });
+
+        const userObj = user.toObject ? user.toObject() : { ...user };
+        delete userObj.password;
+        userObj.isNewUser = isNewUser;
+
+        return res.status(200).json({
+            success: true,
+            isNewUser,
+            data: userObj,
+            token,
+            warning: "Apple token signature verification is scaffolded. Complete with Apple Team ID & Private Key in production.",
+        });
+    } catch (err) {
+        console.error("POST /auth/apple error:", err);
+        return res.status(500).json({
+            success: false,
+            message: err.message || "Apple auth error",
+        });
+    }
+});
+
 router.get("/google", (req, res, next) => {
     const userType = req.query.userType;
 

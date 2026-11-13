@@ -14,6 +14,9 @@ const UserSchema = Schema({
   googleId: {
     type: String,
   },
+  appleId: {
+    type: String,
+  },
   country: {
     type: String,
     // required: true,
