@@ -34,17 +34,27 @@ const matchesSkill = (skillA, skillB) => {
 function formatLocation(loc) {
   if (!loc) return "Remote";
   if (typeof loc === "object") {
-    return [loc.city, loc.state].filter(Boolean).join(", ") || "India";
+    const parts = [loc.city, loc.state, loc.country].filter(Boolean);
+    return parts.length > 0 ? parts.join(", ") : "India";
   }
-  if (typeof loc === "string" && loc.startsWith("{")) {
+  const str = String(loc).trim();
+  if (str.includes("{") && str.includes("}")) {
     try {
-      const parsed = JSON.parse(loc);
-      return [parsed.city, parsed.state].filter(Boolean).join(", ") || "India";
+      const match = str.match(/\{[\s\S]*?\}/);
+      if (match) {
+        const parsed = JSON.parse(match[0]);
+        if (typeof parsed === "object" && parsed !== null) {
+          const parts = [parsed.city, parsed.state, parsed.country].filter(Boolean);
+          const cleanLoc = parts.length > 0 ? parts.join(", ") : "India";
+          const replaced = str.replace(match[0], cleanLoc).replace(/\s+/g, " ").trim();
+          return replaced || "India";
+        }
+      }
     } catch {
-      return loc;
+      return str;
     }
   }
-  return String(loc);
+  return str || "India";
 }
 
 /**
@@ -485,6 +495,7 @@ const getNotification = async (req, res) => {
       notifications = notifications.map((n) => ({
         ...n,
         notificationDetail: resolveTag(n),
+        details: formatLocation(n.details),
       }));
     }
 

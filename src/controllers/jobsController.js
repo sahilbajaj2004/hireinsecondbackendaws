@@ -30,6 +30,32 @@ const matchesSkill = (skillA, skillB) => {
   return false;
 };
 
+function formatLocation(loc) {
+  if (!loc) return "India";
+  if (typeof loc === "object") {
+    const parts = [loc.city, loc.state, loc.country].filter(Boolean);
+    return parts.length > 0 ? parts.join(", ") : "India";
+  }
+  const str = String(loc).trim();
+  if (str.includes("{") && str.includes("}")) {
+    try {
+      const match = str.match(/\{[\s\S]*?\}/);
+      if (match) {
+        const parsed = JSON.parse(match[0]);
+        if (typeof parsed === "object" && parsed !== null) {
+          const parts = [parsed.city, parsed.state, parsed.country].filter(Boolean);
+          const cleanLoc = parts.length > 0 ? parts.join(", ") : "India";
+          const replaced = str.replace(match[0], cleanLoc).replace(/\s+/g, " ").trim();
+          return replaced || "India";
+        }
+      }
+    } catch {
+      return str;
+    }
+  }
+  return str || "India";
+}
+
 /**
  * Dispatch real-time JobAlert notifications to active candidates whose profile skills
  * match the newly posted job requirements.
@@ -57,7 +83,7 @@ const notifyMatchingCandidatesForNewJob = async (job) => {
     const notifBatch = [];
     const jobCompany = job.companyName || job.displayCompanyName || "Employer";
     const jobTitle = job.jobTitle || "New Role";
-    const loc = typeof job.jobLocation === "string" ? job.jobLocation : "India";
+    const loc = formatLocation(job.jobLocation);
 
     for (const candidate of candidates) {
       const candSkillTokens = String(candidate.skills || "")
@@ -597,6 +623,7 @@ const getJobs = async (req, res) => {
         job.profilePic = userInfo?.profilePic || job.profilePic;
         job.isPremiumClient = userInfo?.subscriptionStatus || false;
         job.companyName = userInfo?.companyName || job.companyName;
+        job.jobLocation = formatLocation(job.jobLocation);
 
         if (job.isBudgetDisclosed === false && String(item.companyId) !== String(userId)) {
           delete job.budget;
@@ -969,6 +996,7 @@ const getAdminJobs = async (req, res) => {
         job.profilePic = userInfo?.profilePic || job.profilePic;
         job.isPremiumClient = userInfo?.subscriptionStatus || false;
         job.companyName = userInfo?.companyName || job.companyName;
+        job.jobLocation = formatLocation(job.jobLocation);
 
         return job;
       })
@@ -1153,6 +1181,7 @@ const getjobDetailsById = async (req, res) => {
       if (jobData.isBudgetDisclosed === false && String(jobData.companyId) !== String(userId)) {
         delete jobData.budget;
       }
+      jobData.jobLocation = formatLocation(jobData.jobLocation);
       return res.status(200).json({
         success: true,
         message: "Data fetched successfully",

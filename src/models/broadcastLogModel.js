@@ -20,7 +20,7 @@ const BroadcastLogSchema = new Schema(
     },
     targetUserId: {
       type: Schema.Types.ObjectId,
-      ref: "User",
+      ref: "Users",
       default: null,
     },
     targetUserName: {
@@ -49,7 +49,7 @@ const BroadcastLogSchema = new Schema(
     },
     sentBy: {
       type: Schema.Types.ObjectId,
-      ref: "User",
+      ref: "Users",
       default: null,
     },
     status: {
