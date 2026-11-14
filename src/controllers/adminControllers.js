@@ -11,6 +11,8 @@ const Users = require("../models/userModel");
 const User = require("../models/userModel");
 const Notifications = require("../models/notificatonModel");
 const BroadcastLog = require("../models/broadcastLogModel");
+const EmailBroadcastLog = require("../models/emailBroadcastLogModel");
+const { sendBatchEmails, createBrandedHtmlEmail } = require("../helpers/emailHelper");
 const {
   sendPushNotification,
   sendBatchPushNotifications,
@@ -851,7 +853,7 @@ const searchUsersForPush = async (req, res) => {
  */
 const sendAdminPushNotification = async (req, res) => {
   try {
-    const { target, userId, title, body, deepLink, saveInApp = true } = req.body;
+    const { target, userId, title, body, deepLink, saveInApp = false } = req.body;
 
     if (!title || !title.trim()) {
       return res.status(400).json({ success: false, error: "Notification title is required" });
@@ -926,7 +928,7 @@ const sendAdminPushNotification = async (req, res) => {
     }
 
     // Save In-App Notification in bulk (if saveInApp is enabled)
-    if (saveInApp !== false) {
+    if (saveInApp === true) {
       const inAppDocs = users.map((u) => ({
         userId: String(u._id),
         type: "ADMIN_BROADCAST",
@@ -995,7 +997,7 @@ const getBroadcastHistory = async (req, res) => {
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
-        .populate("sentBy", "firstName lastName email")
+        .populate({ path: "sentBy", model: "Users", select: "firstName lastName email" })
         .lean(),
     ]);
 
@@ -1015,6 +1017,181 @@ const getBroadcastHistory = async (req, res) => {
   }
 };
 
+/**
+ * Get count of users with valid emails per audience segment.
+ */
+const getBroadcastEmailAudienceCounts = async (req, res) => {
+  try {
+    const hasValidEmail = {
+      email: { $exists: true, $ne: "", $not: /@phone\.hireinsecond\.com$/i },
+      status: true,
+    };
+
+    const [
+      totalAll,
+      totalJobSeekers,
+      totalClients,
+      totalPartners,
+    ] = await Promise.all([
+      User.countDocuments(hasValidEmail),
+      User.countDocuments({ ...hasValidEmail, userType: "personal" }),
+      User.countDocuments({ ...hasValidEmail, userType: "client" }),
+      User.countDocuments({
+        ...hasValidEmail,
+        userType: { $in: ["company", "individual"] },
+      }),
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      counts: {
+        all: { total: totalAll },
+        jobseekers: { total: totalJobSeekers },
+        clients: { total: totalClients },
+        partners: { total: totalPartners },
+      },
+    });
+  } catch (error) {
+    console.error("Error in getBroadcastEmailAudienceCounts:", error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+/**
+ * Send email broadcast to targeted segment or individual user.
+ */
+const sendAdminEmailBroadcast = async (req, res) => {
+  try {
+    const { target, userId, subject, body } = req.body;
+
+    if (!subject || !subject.trim()) {
+      return res.status(400).json({ success: false, error: "Email subject is required" });
+    }
+    if (!body || !body.trim()) {
+      return res.status(400).json({ success: false, error: "Email message body is required" });
+    }
+    if (!target || !["all", "jobseekers", "clients", "partners", "single"].includes(target)) {
+      return res.status(400).json({ success: false, error: "Valid target audience is required" });
+    }
+
+    const baseEmailFilter = {
+      email: { $exists: true, $ne: "", $not: /@phone\.hireinsecond\.com$/i },
+      status: true,
+    };
+
+    let users = [];
+    let targetUserName = null;
+    let targetUserEmail = null;
+
+    if (target === "single") {
+      if (!userId) {
+        return res.status(400).json({ success: false, error: "Target userId is required for single email dispatch" });
+      }
+      const singleUser = await User.findById(userId).select("firstName lastName email companyName").lean();
+      if (!singleUser || !singleUser.email || singleUser.email.endsWith("@phone.hireinsecond.com")) {
+        return res.status(404).json({ success: false, error: "Target user has no valid email address" });
+      }
+      users = [singleUser];
+      targetUserName = `${singleUser.firstName || ""} ${singleUser.lastName || ""}`.trim() || singleUser.companyName;
+      targetUserEmail = singleUser.email;
+    } else {
+      let query = { ...baseEmailFilter };
+      if (target === "jobseekers") {
+        query.userType = "personal";
+      } else if (target === "clients") {
+        query.userType = "client";
+      } else if (target === "partners") {
+        query.userType = { $in: ["company", "individual"] };
+      }
+
+      users = await User.find(query).select("firstName lastName email companyName").lean();
+    }
+
+    if (users.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: "No recipients with valid email addresses found in the selected audience.",
+      });
+    }
+
+    // Dispatch batch emails with rate-controlled worker
+    const batchResult = await sendBatchEmails(users, {
+      subject: subject.trim(),
+      bodyHtml: body.trim(),
+    });
+
+    const status =
+      batchResult.deliveredCount === batchResult.total
+        ? "DELIVERED"
+        : batchResult.deliveredCount > 0
+        ? "PARTIAL"
+        : "FAILED";
+
+    // Log the broadcast in EmailBroadcastLog
+    const logDoc = await EmailBroadcastLog.create({
+      subject: subject.trim(),
+      body: body.trim(),
+      target,
+      targetUserId: target === "single" ? userId : null,
+      targetUserName,
+      targetUserEmail,
+      totalTargeted: batchResult.total,
+      deliveredCount: batchResult.deliveredCount,
+      failedCount: batchResult.failedCount,
+      sentBy: req.user?._id || null,
+      status,
+      errorLogs: batchResult.errors || [],
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: `Successfully dispatched to ${batchResult.deliveredCount} recipient(s).`,
+      totalTargeted: batchResult.total,
+      deliveredCount: batchResult.deliveredCount,
+      failedCount: batchResult.failedCount,
+      log: logDoc,
+    });
+  } catch (error) {
+    console.error("Error in sendAdminEmailBroadcast:", error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+/**
+ * Get paginated history of past email broadcasts.
+ */
+const getEmailBroadcastHistory = async (req, res) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.max(1, Math.min(100, parseInt(req.query.limit, 10) || 10));
+    const skip = (page - 1) * limit;
+
+    const [total, list] = await Promise.all([
+      EmailBroadcastLog.countDocuments({}),
+      EmailBroadcastLog.find({})
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .populate({ path: "sentBy", model: "Users", select: "firstName lastName email" })
+        .lean(),
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      list,
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit) || 1,
+      },
+    });
+  } catch (error) {
+    console.error("Error in getEmailBroadcastHistory:", error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+};
+
 module.exports = {
   getUsersDataForAdmin,
   getJobDataForAdmin,
@@ -1026,4 +1203,7 @@ module.exports = {
   searchUsersForPush,
   sendAdminPushNotification,
   getBroadcastHistory,
+  getBroadcastEmailAudienceCounts,
+  sendAdminEmailBroadcast,
+  getEmailBroadcastHistory,
 };

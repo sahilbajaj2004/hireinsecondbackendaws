@@ -32,16 +32,25 @@ const matchesSkill = (skillA, skillB) => {
 
 function formatLocation(loc) {
   if (!loc) return "India";
-  if (typeof loc === "object") {
+  if (typeof loc === "object" && loc !== null) {
     const parts = [loc.city, loc.state, loc.country].filter(Boolean);
     return parts.length > 0 ? parts.join(", ") : "India";
   }
-  const str = String(loc).trim();
+  let str = String(loc).trim();
   if (str.includes("{") && str.includes("}")) {
     try {
       const match = str.match(/\{[\s\S]*?\}/);
       if (match) {
-        const parsed = JSON.parse(match[0]);
+        let clean = match[0].replace(/\\"/g, '"');
+        let parsed = null;
+        try {
+          parsed = JSON.parse(clean);
+        } catch {
+          const cityM = clean.match(/(?:\\?"city\\?")\s*:\s*\\?"([^"\\]+)\\?"/i);
+          const stateM = clean.match(/(?:\\?"state\\?")\s*:\s*\\?"([^"\\]+)\\?"/i);
+          const countryM = clean.match(/(?:\\?"country\\?")\s*:\s*\\?"([^"\\]+)\\?"/i);
+          parsed = { city: cityM?.[1], state: stateM?.[1], country: countryM?.[1] };
+        }
         if (typeof parsed === "object" && parsed !== null) {
           const parts = [parsed.city, parsed.state, parsed.country].filter(Boolean);
           const cleanLoc = parts.length > 0 ? parts.join(", ") : "India";

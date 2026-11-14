@@ -369,8 +369,12 @@ const inviteJobInvitation = async (req, res) => {
                     <table border="0" cellspacing="0" cellpadding="0" style="color:#0f3462; font-family: sans-serif;">
                       <tr>
                         <td>
-                          <h2 style="text-align:center; margin: 0px; padding-bottom: 25px; margin-top: 25px;">
-                           Hire In<span style="color:lightcoral">&nbsp;Second</span></h2>
+                          <h2 style="text-align:center; margin: 0px; padding-bottom: 4px; margin-top: 15px; font-size: 26px; font-weight: 800; color: #0f3462; letter-spacing: -0.5px;">
+                            HireInSecond
+                          </h2>
+                          <div style="text-align:center; font-size: 11px; font-weight: 600; letter-spacing: 1.5px; text-transform: uppercase; color: #64748b; margin-bottom: 20px;">
+                            Tech Hiring &bull; Direct &bull; Verified
+                          </div>
                         </td>
                       </tr>
                       <tr>

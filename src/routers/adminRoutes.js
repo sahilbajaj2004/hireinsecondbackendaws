@@ -10,6 +10,9 @@ const {
   searchUsersForPush,
   sendAdminPushNotification,
   getBroadcastHistory,
+  getBroadcastEmailAudienceCounts,
+  sendAdminEmailBroadcast,
+  getEmailBroadcastHistory,
 } = require("../controllers/adminControllers");
 const { getJobDataForAdmin } = require("../controllers/adminControllers");
 const {
@@ -52,5 +55,10 @@ router.get("/broadcast/counts", userAuthorization, getBroadcastAudienceCounts);
 router.get("/broadcast/search-users", userAuthorization, searchUsersForPush);
 router.post("/broadcast/send", userAuthorization, sendAdminPushNotification);
 router.get("/broadcast/history", userAuthorization, getBroadcastHistory);
+
+// Email Broadcast
+router.get("/broadcast/email-counts", userAuthorization, getBroadcastEmailAudienceCounts);
+router.post("/broadcast/email-send", userAuthorization, sendAdminEmailBroadcast);
+router.get("/broadcast/email-history", userAuthorization, getEmailBroadcastHistory);
 
 module.exports = router;
